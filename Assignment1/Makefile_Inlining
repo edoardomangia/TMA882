@@ -1,0 +1,52 @@
+NY: all benchmark clean
+
+CC = gcc
+BINS = locality_inlining_O0 locality_no_inlining_O0 \
+       locality_inlining_O2 locality_no_inlining_O2 \
+       locality_inlining_O2_native locality_no_inlining_O2_native
+
+all: $(BINS)
+
+# Compile with -O0
+locality_inlining_O0: locality_inlining.c
+	$(CC) -O0 -o $@ $<
+locality_no_inlining_O0: locality_no_inlining.c
+	$(CC) -O0 -o $@ $<
+
+# Compile with -O2
+locality_inlining_O2: locality_inlining.c
+	$(CC) -O2 -o $@ $<
+locality_no_inlining_O2: locality_no_inlining.c
+	$(CC) -O2 -o $@ $<
+
+# Compile with -O2 -march=native
+locality_inlining_O2_native: locality_inlining.c
+	$(CC) -O2 -march=native -o $@ $<
+locality_no_inlining_O2_native: locality_no_inlining.c
+	$(CC) -O2 -march=native -o $@ $<
+
+# Benchmark the binaries using hyperfine
+benchmark: $(BINS)
+	@echo "Benchmarking locality_inlining with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./locality_inlining_O0
+
+	@echo "Benchmarking locality_no_inlining with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./locality_no_inlining_O0
+
+	@echo "Benchmarking locality_inlining with -O2:"
+	hyperfine --warmup 10 --runs 5000 ./locality_inlining_O2
+
+	@echo "Benchmarking locality_no_inlining with -O2:"
+	hyperfine --warmup 10 --runs 5000 ./locality_no_inlining_O2
+
+	@echo "Benchmarking locality_inlining with -O2 -march=native:"
+	hyperfine --warmup 10 --runs 5000 ./locality_inlining_O2_native
+
+	@echo "Benchmarking locality_no_inlining with -O2 -march=native:"
+	hyperfine --warmup 10 --runs 5000 ./locality_no_inlining_O2_native
+
+# Clean up build artifacts
+clean:
+	rm -f $(BINS)
+
+

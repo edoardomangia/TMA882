@@ -1,0 +1,19 @@
+CC = gcc
+SRC = indirect_addressing.c
+
+all: O0 O2 O2_native
+
+O0: $(SRC)
+	$(CC) -O0 -o indirect_addressing_O0 $(SRC)
+	./indirect_addressing_O0
+O2: $(SRC)
+	$(CC) -O2 -o indirect_addressing_O2 $(SRC)
+	./indirect_addressing_O2
+O2_native: $(SRC)
+	$(CC) -O2 -march=native -o indirect_addressing_O2_native $(SRC)
+	./indirect_addressing_O2_native
+
+# Clean up compiled binaries
+clean:
+	rm -f indirect_addressing_O0 indirect_addressing_O2 indirect_addressing_O2_native
+

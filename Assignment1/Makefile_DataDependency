@@ -1,0 +1,112 @@
+.PHONY: all benchmark clean
+
+CC = gcc
+
+BINS_O0 = data_dependency_1_O0 data_dependency_2_O0 data_dependency_4_O0 data_dependency_8_O0 data_dependency_4_array_O0
+BINS_O2 = data_dependency_1_O2 data_dependency_2_O2 data_dependency_4_O2 data_dependency_8_O2 data_dependency_4_array_O2
+BINS_O2_NATIVE = data_dependency_1_O2_native data_dependency_2_O2_native data_dependency_4_O2_native data_dependency_8_O2_native data_dependency_4_array_O2_native
+
+all: $(BINS_O0) $(BINS_O2) $(BINS_O2_NATIVE)
+
+# Compile with -O0
+data_dependency_1_O0 : data_dependency_1.c
+	$(CC) -O0 -o $@ $<
+
+data_dependency_2_O0 : data_dependency_2.c
+	$(CC) -O0 -o $@ $<
+
+data_dependency_4_O0 : data_dependency_4.c
+	$(CC) -O0 -o $@ $<
+
+data_dependency_8_O0 : data_dependency_8.c
+	$(CC) -O0 -o $@ $<
+
+data_dependency_4_array_O0 : data_dependency_4_array.c 
+	$(CC) -O0 -o $@ $<
+
+
+# Compile with -O2
+data_dependency_1_O2 : data_dependency_1.c
+	$(CC) -O2 -o $@ $<
+data_dependency_2_O2 : data_dependency_2.c
+	$(CC) -O2 -o $@ $<
+data_dependency_4_O2 : data_dependency_4.c
+	$(CC) -O2 -o $@ $<
+data_dependency_8_O2 : data_dependency_8.c
+	$(CC) -O2 -o $@ $<
+data_dependency_4_array_O2 : data_dependency_4_array.c 
+	$(CC) -O2 -o $@ $<
+
+
+# Compile with -O2 -march=native
+data_dependency_1_O2_native : data_dependency_1.c
+	$(CC) -O2 -march=native -o $@ $<
+data_dependency_2_O2_native : data_dependency_2.c
+	$(CC) -O2 -march=native -o $@ $<
+data_dependency_4_O2_native : data_dependency_4.c
+	$(CC) -O2 -march=native -o $@ $<
+data_dependency_8_O2_native : data_dependency_8.c
+	$(CC) -O2 -march=native -o $@ $<
+data_dependency_4_array_O2_native : data_dependency_4_array.c 
+	$(CC) -O2 -march=native -o $@ $<
+
+
+# Benchmark the binaries using hyperfine
+benchmark: $(BINS_O0) $(BINS_O2) $(BINS_O2_NATIVE)
+	
+	@echo "Benchmarking data_dependency_1_O0 with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_1_O0 
+	
+	@echo "Benchmarking data_dependency_2_O0 with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_2_O0 
+	
+	@echo "Benchmarking data_dependency_4_O0 with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_4_O0 
+	
+	@echo "Benchmarking data_dependency_8_O0 with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_8_O0 
+	
+	@echo "Benchmarking data_dependency_4_array_O0 with -O0:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_4_array_O0
+	
+	@echo "Benchmarking data_dependency_1_O2:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_1_O2 
+	
+	@echo "Benchmarking data_dependency_2_O2:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_2_O2 
+	
+	@echo "Benchmarking data_dependency_4_O2:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_4_O2 
+	
+	@echo "Benchmarking data_dependency_8_O2:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_8_O2 
+	
+	@echo "Benchmarking data_dependency_4_array_O2:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_4_array_O2
+	
+	@echo "Benchmarking data_dependency_1_O2_native:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_1_O2_native 
+	
+	@echo "Benchmarking data_dependency_2_O2_native:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_2_O2_native 
+	
+	@echo "Benchmarking data_dependency_4_O2_native:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_4_O2_native 
+	
+	@echo "Benchmarking data_dependency_8_O2_native:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_8_O2_native 
+	
+	@echo "Benchmarking data_dependency_4_array_O2:"
+	hyperfine --warmup 10 --runs 5000 ./data_dependency_4_array_O2_native
+
+
+# Clean up build artifacts
+clean:
+	rm -f $(BINS_O0) $(BINS_O2) $(BINS_O2_NATIVE)
+
+
+
+
+
+
+
