@@ -9,18 +9,17 @@
 #include <time.h>
 
 /* GLOBAL VARIABLES */
-int img_res;    // Resolution of image and degree of polynomial
+int img_res;  // Resolution of image and degree of polynomial
 int poly_deg;
 
 // Thread variables
 int thread_count;                // Number of threads
 int ** roots_list;               // Pointer to pointer list for roots and iterations
-int ** iter_list;
-char * line_done;                // keeps track of which lines have been calculated
+int ** iter_list;								 // Stores the number of iteration it took a pixel to converge 
+char * line_done;                // Keeps track of which rows have been calculated
 struct timespec sleep_time;
 void* thread_args;               // Thread index
 pthread_mutex_t line_done_mutex; // Mutex variable for threads
-//
 
 double *real_parts;              // List for real/imaginary-parts of the roots 
 double *imag_parts;

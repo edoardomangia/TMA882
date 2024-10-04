@@ -2,34 +2,36 @@
 #include <stdlib.h>
 #include <time.h>
 
-void generate_random_coordinate(char *buffer) {
-  int sign = rand() % 2 == 0 ? 1 : -1;
-  int integer_part = rand() % 11; // 0 to 10 (since 10 is included in the range)
-  int fractional_part = rand() % 1000; // 0 to 999
-  double coordinate = sign * (integer_part + fractional_part / 1000.0);
-  sprintf(buffer, "%+07.3f", coordinate);
-}
+#define NUM_POINTS 100000
+#define FILENAME "cells_long"
+#define COORD_MIN -10.0
+#define COORD_MAX 10.0
 
-void generate_coordinates_file(int num_cells, const char *filename) {
-  FILE *file = fopen(filename, "w");
-  if (file == NULL) {
-    perror("Error opening file");
-    exit(EXIT_FAILURE);
-  }
-
-  char coord1[10], coord2[10], coord3[10];
-  for (int i = 0; i < num_cells; i++) {
-    generate_random_coordinate(coord1);
-    generate_random_coordinate(coord2);
-    generate_random_coordinate(coord3);
-    fprintf(file, "%s %s %s\n", coord1, coord2, coord3);
-  }
-
-  fclose(file);
+// Function to generate a random double between min and max
+double random_coordinate() {
+    return COORD_MIN + ((double)rand() / (double)RAND_MAX) * (COORD_MAX - COORD_MIN);
 }
 
 int main() {
-  srand(time(NULL)); // Seed the random number generator with current time
-  generate_coordinates_file(10, "cells.txt");
-  return 0;
+    FILE *file = fopen(FILENAME, "w");
+    if (!file) {
+        printf("Error opening file.\n");
+        return 1;
+    }
+
+    srand(time(NULL));
+
+    for (int i = 0; i < NUM_POINTS; i++) {
+        double x = random_coordinate();
+        double y = random_coordinate();
+        double z = random_coordinate();
+
+        fprintf(file, "%+07.3f %+07.3f %+07.3f\n", x, y, z);
+    }
+
+    fclose(file);
+
+    printf("Coordinates generated and saved to %s\n", FILENAME);
+    return 0;
 }
+
