@@ -1,296 +1,413 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
-#include <complex.h>
-#include <math.h>
 #include <string.h>
-#include <pthread.h>
-#include <stddef.h>
-#include <time.h>
+#include <math.h>
+#include <stdbool.h>
+#include <threads.h>
 
-/* GLOBAL VARIABLES */
-int img_res;  // Resolution of image and degree of polynomial
-int poly_deg;
+/* Constants */
+#define MAX_ITER 128
+#define CONVERGE_THRESHOLD 1e-3
+#define DIVERGE_THRESHOLD 1e10
 
-// Thread variables
-int thread_count;                // Number of threads
-int ** roots_list;               // Pointer to pointer list for roots and iterations
-int ** iter_list;								 // Stores the number of iteration it took a pixel to converge 
-char * line_done;                // Keeps track of which rows have been calculated
-struct timespec sleep_time;
-void* thread_args;               // Thread index
-pthread_mutex_t line_done_mutex; // Mutex variable for threads
+/* Structure to hold thread data */
+typedef struct {
+    int thread_id;
+    int num_threads;
+    int res;
+    int deg;
+    double real_min;
+    double real_max;
+    double imag_min;
+    double imag_max;
+    double *roots_real;
+    double *roots_imag;
+    unsigned char *attractors;   // Output buffer for attractors
+    unsigned char *convergence;  // Output buffer for convergence
+} thread_data_t;
 
-double *real_parts;              // List for real/imaginary-parts of the roots 
-double *imag_parts;
+/* Structure to hold RGB colors */
+typedef struct {
+    unsigned char r;
+    unsigned char g;
+    unsigned char b;
+} color_t;
 
-int colorMapR[] = {255, 0, 0, 255, 255, 0, 255};    // Colors for each root
-int colorMapG[] = {0, 255, 0, 145, 0, 125, 255};
-int colorMapB[] = {0, 255, 0, 0, 255, 255, 0};
+/* Function to convert HSV to RGB */
+static inline color_t hsv_to_rgb(double h, double s, double v) {
+    double c = v * s;
+    double h_prime = fmod(h / 60.0, 6.0);
+    double x = c * (1.0 - fabs(fmod(h_prime, 2.0) - 1.0));
+    double m = v - c;
+    double r_, g_, b_;
 
-FILE *file_attractors;   // File-pointer for attractors file
-FILE *file_convergence;  // File-pointer for convergence file
-/* GLOBAL VARIABLES */
-
-
-void compute_newton(int poly_deg, int *root_array, int *iter_array, int row_index, int img_res, double *real_parts, double *imag_parts);
-void compute_roots(int poly_deg, double *real_parts, double *imag_parts);
-void write_image(FILE *file_attractors, FILE *file_convergence, int *colorMapR, int *colorMapG, int *colorMapB, int *iterations, int *roots, int img_res);
-void *compute_newton_thread(void *thread_args);
-void *write_image_thread(void *thread_args);
-
-int main(int argc, char const *argv[])
-{   
-    char *endptr1;
-    char *endptr2;
-
-    poly_deg = atoi(argv[3]);        // degree of the function: x^(deg) - 1
-
-    if(argc != 4){
-        printf("\nArgument count not equal to 4. Exiting.\n");
+    if (0 <= h_prime && h_prime < 1) {
+        r_ = c; g_ = x; b_ = 0;
+    } else if (1 <= h_prime && h_prime < 2) {
+        r_ = x; g_ = c; b_ = 0;
+    } else if (2 <= h_prime && h_prime < 3) {
+        r_ = 0; g_ = c; b_ = x;
+    } else if (3 <= h_prime && h_prime < 4) {
+        r_ = 0; g_ = x; b_ = c;
+    } else if (4 <= h_prime && h_prime < 5) {
+        r_ = x; g_ = 0; b_ = c;
+    } else {
+        r_ = c; g_ = 0; b_ = x;
     }
-    else {
-        if(strncmp("-t", argv[1], 2) == 0){
-            thread_count = strtol(argv[1]+2, &endptr1, 10);
-            img_res = strtol(argv[2]+2, &endptr2, 10);
-        }
-        else{
-            thread_count = strtol(argv[2]+2, &endptr1, 10);
-            img_res = strtol(argv[1]+2, &endptr2, 10);
-        }
-    }
-    
-    real_parts = (double*) malloc(sizeof(double) * img_res);
-    imag_parts = (double*) malloc(sizeof(double) * img_res);
 
-		// Calculates the roots of the function f(x) = x^(deg) - 1
-    compute_roots(poly_deg, real_parts, imag_parts);    
-
-		// Initializing the .ppm file, creating the header
-    char attractor_filename[27];	
-    char convergence_filename[27];
-
-    sprintf(attractor_filename, "newton_attractors_x%d.ppm", poly_deg);
-    sprintf(convergence_filename, "newton_convergence_x%d.ppm", poly_deg);
-
-    file_attractors = fopen(attractor_filename, "wb");
-    file_convergence = fopen(convergence_filename, "wb");
-
-    fprintf(file_attractors, "P6\n%d %d\n255\n", img_res, img_res);
-    fprintf(file_convergence, "P6\n%d %d\n75\n", img_res, img_res);
-    
-    // Creates "roots_list" and "iter_list" for each of the rows in the image
-    // so the threads can work locally on a row and save the results to these lists
-    roots_list = (int**) malloc(sizeof(int*) * img_res);
-    iter_list = (int**) malloc(sizeof(int*) * img_res);
-
-    // allocates memory for check list full of zeros
-    line_done = (char*)calloc(img_res, sizeof(char));     // Used in nanosleep function in write_image_thread
-    sleep_time.tv_sec = 0;                             // Waits 0s + 10000ns
-    sleep_time.tv_nsec = 10000;
-    
-    pthread_t* compute_threads = (pthread_t*)malloc(sizeof(pthread_t)*thread_count);   // Allocate memory for pointer to threads       
-    for (int t_index = 0; t_index < thread_count; t_index ++) {
-        int *thread_args = malloc(sizeof(int));
-        *thread_args = t_index;
-        pthread_create(&compute_threads[t_index], NULL, compute_newton_thread, (void*) thread_args);  // Creates compute-threads and executes compute_newton_thread
-    }
-    pthread_t write_thread;
-    pthread_create(&write_thread, NULL, write_image_thread, NULL);   // Create write-thread
-    
-    int thread_ret;
-    for (size_t t_index = 0; t_index < thread_count; t_index++) {
-        if ((thread_ret = pthread_join(compute_threads[t_index], NULL))){
-            printf("Error joining thread: %d\n", thread_ret);
-            exit(1);
-        }
-    }
-    thread_ret = pthread_join(write_thread, NULL);
-    pthread_mutex_destroy(&line_done_mutex);
-    
-    fclose(file_attractors);
-    fclose(file_convergence);
-    
-    return 0;
+    color_t color;
+    color.r = (unsigned char)((r_ + m) * 255.0);
+    color.g = (unsigned char)((g_ + m) * 255.0);
+    color.b = (unsigned char)((b_ + m) * 255.0);
+    return color;
 }
 
-// Maps each pixel (column) in the image to a complex number
-// Applies Newton's method to find the roots of the polynomial for each pixel, checks for convergence or divergence
-// For each pixel, records the index of the root to which it converged and the number of iteration taken
-void compute_newton(int poly_deg, int *root_array, int *iter_array, int row_index, int img_res, double *real_parts, double *imag_parts){
-    int iter;       			
-    bool continue_step;		
+/* Function to compute roots of x^d -1 */
+void compute_roots(int deg, double *roots_real, double *roots_imag) {
+    for(int k = 0; k < deg; ++k){
+        double angle = 2.0 * M_PI * k / deg;
+        roots_real[k] = cos(angle);
+        roots_imag[k] = sin(angle);
+    }
+}
 
-    double origin;
-    double delta_re;
-    double delta_im;
-    double distance;
-    
-    double step_size = 1 / thread_count;      // Step size column direction
+/* Fast power function for complex numbers */
+static inline void complex_pow(int deg, double zr, double zi, double *result_r, double *result_i) {
+    double r = zr;
+    double i = zi;
+    double res_r = 1.0;
+    double res_i = 0.0;
 
-    double img_part_row = 2 - 4*row_index/(double)img_res;	// Mapping of row index to the imaginary part 
-    double inv_res = 1/(double)img_res;											// Precompute inverse of resolution 
+    for(int e = 0; e < deg; ++e){
+        double temp_r = res_r * r - res_i * i;
+        double temp_i = res_r * i + res_i * r;
+        res_r = temp_r;
+        res_i = temp_i;
+    }
+    *result_r = res_r;
+    *result_i = res_i;
+}
 
-    int root_idx;    			// Variable to store the root-index...
-    int iter_placeholder; // ...and temporarily iteration count
-    
-    long long int large_value_limit = 10000000000; // Threshold to detect divergence
+/* Thread function */
+int thread_func(void *arg){
+    thread_data_t *data = (thread_data_t*) arg;
+    int thread_id = data->thread_id;
+    int num_threads = data->num_threads;
+    int res = data->res;
+    int deg = data->deg;
+    double real_min = data->real_min;
+    double real_max = data->real_max;
+    double imag_min = data->imag_min;
+    double imag_max = data->imag_max;
+    double *roots_real = data->roots_real;
+    double *roots_imag = data->roots_imag;
+    unsigned char *attractors = data->attractors;
+    unsigned char *convergence = data->convergence;
 
-    double complex z;
-    double complex z_inverse;    // Inverse of z
+    double real_step = (real_max - real_min) / (double)(res - 1);
+    double imag_step = (imag_max - imag_min) / (double)(res - 1);
 
-    for(size_t col_index = 0; col_index < img_res; ++col_index){
-        continue_step = true;
-        iter_placeholder = 0;
-        root_idx = 0;
-        iter = 0;
-        z = -2 + 4*((double) col_index*inv_res) + img_part_row*I; // Initializes x based on the pixel position
+    // Determine the range of rows this thread will process
+    for(int y = thread_id; y < res; y += num_threads){
+        double zi = imag_max - y * imag_step; // y axis inverted
+        for(int x = 0; x < res; ++x){
+            double zr = real_min + x * real_step;
+            double z_r = zr;
+            double z_i = zi;
 
-        while(continue_step)
-        {   
-            if(iter > 500){    // Limits iterations to 500
-                iter_placeholder = iter;
-                continue_step = false;
-                break;
-            }
-            origin = creal(z)*creal(z) + cimag(z)*cimag(z); // Calculate the distance to origin (squared)
-            if(origin < 0.000001){													// If x is close to the origin, stops
-                iter_placeholder = iter;
-                continue_step = false;
-                break;
-            }
-            
-            if(origin - 1 < 0.001){					// Checks if z is close to the unit circle
-                for(size_t root = 0; root < poly_deg; ++root){
-                    delta_re = creal(z) - real_parts[root];              // Difference in real part
-                    delta_im = cimag(z) - imag_parts[root]; 						 // Difference in imaginary part
-                    distance = delta_re*delta_re + delta_im*delta_im;    // Calculate distance to the root (squared)
-                		
-										// Checks if the point has converged to the current root or if it's diverging 
-                    if((distance < 0.000001) || (creal(z) > large_value_limit) || (cimag(z) > large_value_limit)){ 
-                        root_idx = root;				 // Stores the index of the converged root
-                        iter_placeholder = iter; // Stores the number of iterations it took to convergence
-                        continue_step = false;
+            int iter = 0;
+            int root_found = deg; // Initialize to 'diverged'
+
+            while(iter < MAX_ITER){
+                // Compute z^deg
+                double z_pow_r, z_pow_i;
+                complex_pow(deg, z_r, z_i, &z_pow_r, &z_pow_i);
+
+                // f(z) = z^deg - 1
+                double f_r = z_pow_r - 1.0;
+                double f_i = z_pow_i;
+
+                // Compute f'(z) = deg * z^(deg-1)
+                double z_pow_prev_r, z_pow_prev_i;
+                complex_pow(deg - 1, z_r, z_i, &z_pow_prev_r, &z_pow_prev_i);
+                double df_r = deg * z_pow_prev_r;
+                double df_i = deg * z_pow_prev_i;
+
+                // Compute |f'(z)|^2
+                double df_mag_sq = df_r * df_r + df_i * df_i;
+                if(df_mag_sq == 0.0){
+                    break; // Avoid division by zero
+                }
+
+                // Compute f(z)/f'(z)
+                double ratio_r = (f_r * df_r + f_i * df_i) / df_mag_sq;
+                double ratio_i = (f_i * df_r - f_r * df_i) / df_mag_sq;
+
+                // Update z: z = z - f(z)/f'(z)
+                z_r -= ratio_r;
+                z_i -= ratio_i;
+
+                // Check convergence to any root
+                bool converged = false;
+                for(int k = 0; k < deg; ++k){
+                    double dr = z_r - roots_real[k];
+                    double di = z_i - roots_imag[k];
+                    double dist_sq = dr * dr + di * di;
+                    if(dist_sq < CONVERGE_THRESHOLD * CONVERGE_THRESHOLD){
+                        root_found = k;
+                        converged = true;
                         break;
                     }
                 }
-            }
-            if(continue_step){        // Only proceed if the point hasn't converged  
-                switch(poly_deg)
-                {
-                case 1: 		// For degree 1, the root is always at z = 1
-                    z = 1;	
-                    break;
-                
-                case 2:			// ...use the Newton's formula for z^2 - 1
-                    z = 0.5*((creal(z)/origin - (cimag(z)/origin)*I) + z);
-                    break;
-
-                case 5:			// ...calculate 1/z and use it in the Newton's method step
-                    z_inverse = creal(z)/origin - (cimag(z)/origin)*I;    
-                    z = 0.2*(z_inverse*z_inverse*z_inverse*z_inverse) + 0.8*z;
-                    break;
-                
-                case 7:			// ...
-                    z_inverse = creal(z)/origin - (cimag(z)/origin)*I;    // calculate 1/z
-                    z = 0.14285714*(z_inverse*z_inverse*z_inverse*z_inverse*z_inverse*z_inverse) + 0.85714286*z;
-                    break;
-
-                default:
+                if(converged){
                     break;
                 }
+
+                // Check divergence conditions
+                double mag_sq = z_r * z_r + z_i * z_i;
+                if(mag_sq < CONVERGE_THRESHOLD * CONVERGE_THRESHOLD || 
+                   fabs(z_r) > DIVERGE_THRESHOLD || 
+                   fabs(z_i) > DIVERGE_THRESHOLD){
+                    root_found = deg; // 'diverged'
+                    break;
+                }
+
+                iter++;
             }
-            ++iter;
-        }
-        root_array[col_index] = root_idx;      		// Stores the root index for this pixel
-        iter_array[col_index] = iter_placeholder;	// Stores the iteration count for this pixel
-    }
-}
 
-// Calculates the roots of a polynomial of the form z^n - 1
-void compute_roots(int poly_deg, double *real_parts, double *imag_parts){
-    for(size_t i = 0; i < poly_deg; ++i){
-        real_parts[i] = cos(2*M_PI * i/poly_deg);
-        imag_parts[i] = sin(2*M_PI * i/poly_deg);
-    }
-}
-
-// Writes the results to 2 PPM image files 
-void write_image(FILE *file_attractors, FILE *file_convergence, int *colorMapR, int *colorMapG, int *colorMapB, int *iterations, int *roots, int img_res){
-    char pixel_buffer[img_res*3];			// Temporary buffer to store pixel color data for a row 
-    
-		size_t root_idx = 0;							//  
-
-		// Sets the RGB values based on the root the pixel converged to 
-    for (size_t pixel_idx = 0; pixel_idx < img_res*3; pixel_idx+=3){
-        pixel_buffer[pixel_idx] = colorMapR[roots[root_idx]];					// Red
-        pixel_buffer[pixel_idx+1] = colorMapG[roots[root_idx]];				// Green 
-        pixel_buffer[pixel_idx+2] = colorMapB[roots[root_idx]];				// Blue
-        ++root_idx;
-    }
-    fwrite(pixel_buffer, sizeof(char), img_res*3, file_attractors);
-
-    root_idx = 0;
-		
-		// Sets the RGB valuse based on the number of iterations 
-    for (size_t pixel_idx = 0; pixel_idx < img_res*3; pixel_idx+=3){
-        pixel_buffer[pixel_idx] = iterations[root_idx];								// Red
-        pixel_buffer[pixel_idx+1] = iterations[root_idx];							// Green
-        pixel_buffer[pixel_idx+2] = iterations[root_idx];							// Blue
-        ++root_idx;
-    }
-    fwrite(pixel_buffer, sizeof(char), img_res*3, file_convergence);
-}
-
-// Runs the Newton's method computation for a specific thread
-// Each thread calculates the method for specific rows of the image, assigned based on the thread's index 
-// The results are stored in shared arrays, with proper synchronization
-void *compute_newton_thread(void *thread_args) {
-    int offset = *((int*)thread_args);	// Extract thread index from the arguments
-    free(thread_args);									
-
-		// The starting row for each thread is determined by its thread index 
-    for (size_t row_idx = offset; row_idx < img_res; row_idx += thread_count) {  
-        
-        int *roots_result = (int*)malloc(sizeof(int) * img_res);    // Memory for root results for the current row
-        int *iter_result = (int*)malloc(sizeof(int) * img_res);			// Memory for iteration... 
-        
-        compute_newton(poly_deg, roots_result, iter_result, row_idx, img_res, real_parts, imag_parts);
-        
-        pthread_mutex_lock(&line_done_mutex);    // Locks the mutex before updating the shared data
-        roots_list[row_idx] = roots_result;			 // Stores the results in the global root array
-        iter_list[row_idx] = iter_result;				 //	...in the global iteration array
-        line_done[row_idx] = 1;									 // Marks the row as calculated 
-        pthread_mutex_unlock(&line_done_mutex);	 // Unlocks the mutex 
-    }
-    return NULL;
-}
-
-// Write-function for write-thread
-void *write_image_thread(void* thread_args){
-    char *line_done_local = (char*)calloc(img_res, sizeof(char)); // Tracks which rows have been fully processed
-
-		for (size_t idx = 0; idx < img_res; ) {			// Iterates through each row of the image 
-        pthread_mutex_lock(&line_done_mutex);		
-        if (line_done[idx] != 0) {							// If already marked as done
-            memcpy(line_done_local, line_done, img_res * sizeof(char));
-        }
-        pthread_mutex_unlock(&line_done_mutex);
-        
-        if (line_done_local[idx] == 0) {				// If current row not ready
-            nanosleep(&sleep_time, NULL);				// The thread pauses 
-            continue;														
-        }
-        for (; idx < img_res && line_done_local[idx] != 0; idx++) {	// Thread iterates over rows that are ready 
-            int* root_row = roots_list[idx];	// For each completed row, retrieves root_rows from roots_list
-            int* iter_row = iter_list[idx];		// ...
-
-						// Writes the row's pixel data to the 2 output files 
-            write_image(file_attractors, file_convergence, colorMapR, colorMapG, colorMapB, iter_row, root_row, img_res);
-            free(root_row);     // Free memory for line idx roots in compute_newton_thread
-            free(iter_row);     // Free memory for line idx iterations in compute_newton_thread
+            // Store results
+            attractors[y * res + x] = (unsigned char)root_found;
+            convergence[y * res + x] = (iter >= MAX_ITER) ? 255 : (unsigned char)(255.0 * iter / MAX_ITER);
         }
     }
-    return NULL;
+    return 0;
+}
+
+/* Main function */
+int main(int argc, char *argv[]){
+    if(argc < 4){
+        fprintf(stderr, "Usage: %s -t<num_threads> -l<resolution> <degree>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    int num_threads = 1;
+    int res = 1000;
+    int deg = 3;
+
+    /* Parse command line arguments */
+    for(int i =1; i < argc -1; ++i){
+        if(strncmp(argv[i], "-t", 2) ==0){
+            num_threads = atoi(argv[i]+2);
+            if(num_threads <1){
+                fprintf(stderr, "Number of threads must be at least 1.\n");
+                return EXIT_FAILURE;
+            }
+        }
+        else if(strncmp(argv[i], "-l", 2) ==0){
+            res = atoi(argv[i]+2);
+            if(res <1){
+                fprintf(stderr, "Resolution must be at least 1.\n");
+                return EXIT_FAILURE;
+            }
+        }
+        else{
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* Last argument is degree */
+    deg = atoi(argv[argc -1]);
+    if(deg <1 || deg >=10){
+        fprintf(stderr, "Degree must be between 1 and 9.\n");
+        return EXIT_FAILURE;
+    }
+
+    /* Compute roots */
+    double *roots_real = malloc(sizeof(double) * deg);
+    double *roots_imag = malloc(sizeof(double) * deg);
+    if(!roots_real || !roots_imag){
+        fprintf(stderr, "Memory allocation failed for roots.\n");
+        free(roots_real);
+        free(roots_imag);
+        return EXIT_FAILURE;
+    }
+    compute_roots(deg, roots_real, roots_imag);
+
+    /* Allocate output buffers */
+    size_t total_pixels = (size_t)res * res;
+    unsigned char *attractors = malloc(sizeof(unsigned char) * total_pixels);
+    unsigned char *convergence = malloc(sizeof(unsigned char) * total_pixels);
+    if(!attractors || !convergence){
+        fprintf(stderr, "Memory allocation failed for output buffers.\n");
+        free(roots_real);
+        free(roots_imag);
+        if(attractors) free(attractors);
+        if(convergence) free(convergence);
+        return EXIT_FAILURE;
+    }
+
+    /* Initialize output buffers */
+    memset(attractors, 0, sizeof(unsigned char) * total_pixels);
+    memset(convergence, 0, sizeof(unsigned char) * total_pixels);
+
+    /* Prepare thread data */
+    thrd_t *threads = malloc(sizeof(thrd_t) * num_threads);
+    thread_data_t *thread_data = malloc(sizeof(thread_data_t) * num_threads);
+    if(!threads || !thread_data){
+        fprintf(stderr, "Memory allocation failed for threads.\n");
+        free(roots_real);
+        free(roots_imag);
+        free(attractors);
+        free(convergence);
+        if(threads) free(threads);
+        if(thread_data) free(thread_data);
+        return EXIT_FAILURE;
+    }
+
+    for(int i=0; i < num_threads; ++i){
+        thread_data[i].thread_id = i;
+        thread_data[i].num_threads = num_threads;
+        thread_data[i].res = res;
+        thread_data[i].deg = deg;
+        thread_data[i].real_min = -2.0;
+        thread_data[i].real_max = 2.0;
+        thread_data[i].imag_min = -2.0;
+        thread_data[i].imag_max = 2.0;
+        thread_data[i].roots_real = roots_real;
+        thread_data[i].roots_imag = roots_imag;
+        thread_data[i].attractors = attractors;
+        thread_data[i].convergence = convergence;
+
+        if(thrd_create(&threads[i], thread_func, &thread_data[i]) != thrd_success){
+            fprintf(stderr, "Failed to create thread %d\n", i);
+            // Cleanup
+            for(int j=0; j < i; ++j){
+                thrd_join(threads[j], NULL);
+            }
+            free(roots_real);
+            free(roots_imag);
+            free(attractors);
+            free(convergence);
+            free(threads);
+            free(thread_data);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* Wait for threads to finish */
+    for(int i=0; i < num_threads; ++i){
+        thrd_join(threads[i], NULL);
+    }
+
+    /* Generate colors for roots */
+    color_t *root_colors = malloc(sizeof(color_t) * (deg +1)); // +1 for divergence
+    if(!root_colors){
+        fprintf(stderr, "Memory allocation failed for root colors.\n");
+        free(roots_real);
+        free(roots_imag);
+        free(threads);
+        free(thread_data);
+        free(attractors);
+        free(convergence);
+        return EXIT_FAILURE;
+    }
+
+    for(int k=0; k < deg; ++k){
+        double hue = 360.0 * k / deg;
+        root_colors[k] = hsv_to_rgb(hue, 1.0, 1.0);
+    }
+    // Color for divergence (black)
+    root_colors[deg].r = 0;
+    root_colors[deg].g = 0;
+    root_colors[deg].b = 0;
+
+    /* Open PPM files in binary mode */
+    char attractor_filename[50];
+    char convergence_filename[50];
+    sprintf(attractor_filename, "newton_attractors_x%d.ppm", deg);
+    sprintf(convergence_filename, "newton_convergence_x%d.ppm", deg);
+
+    FILE *f_attractor = fopen(attractor_filename, "wb");
+    FILE *f_convergence = fopen(convergence_filename, "wb");
+    if(!f_attractor || !f_convergence){
+        fprintf(stderr, "Failed to open output files.\n");
+        free(roots_real);
+        free(roots_imag);
+        free(threads);
+        free(thread_data);
+        free(attractors);
+        free(convergence);
+        free(root_colors);
+        if(f_attractor) fclose(f_attractor);
+        if(f_convergence) fclose(f_convergence);
+        return EXIT_FAILURE;
+    }
+
+    /* Write PPM headers (P6 - binary) */
+    fprintf(f_attractor, "P6\n%d %d\n255\n", res, res);
+    fprintf(f_convergence, "P6\n%d %d\n255\n", res, res);
+
+    /* Prepare buffer for row data */
+    size_t row_size = (size_t)res * 3; // RGB per pixel
+    unsigned char *attractor_row = malloc(sizeof(unsigned char) * row_size);
+    unsigned char *convergence_row = malloc(sizeof(unsigned char) * row_size);
+    if(!attractor_row || !convergence_row){
+        fprintf(stderr, "Memory allocation failed for PPM rows.\n");
+        fclose(f_attractor);
+        fclose(f_convergence);
+        free(roots_real);
+        free(roots_imag);
+        free(threads);
+        free(thread_data);
+        free(attractors);
+        free(convergence);
+        free(root_colors);
+        if(attractor_row) free(attractor_row);
+        if(convergence_row) free(convergence_row);
+        return EXIT_FAILURE;
+    }
+
+    /* Write pixel data */
+    for(int y=0; y < res; ++y){
+        for(int x=0; x < res; ++x){
+            int idx = y * res + x;
+            int root_idx = attractors[idx];
+            color_t color;
+            if(root_idx >=0 && root_idx < deg){
+                color = root_colors[root_idx];
+            }
+            else{
+                color = root_colors[deg]; // Diverged
+            }
+            attractor_row[x * 3]     = color.r;
+            attractor_row[x * 3 +1]  = color.g;
+            attractor_row[x * 3 +2]  = color.b;
+
+            // Convergence: grayscale
+            unsigned char gray = convergence[idx];
+            convergence_row[x * 3]     = gray;
+            convergence_row[x * 3 +1]  = gray;
+            convergence_row[x * 3 +2]  = gray;
+        }
+        // Write the entire row at once
+        fwrite(attractor_row, sizeof(unsigned char), row_size, f_attractor);
+        fwrite(convergence_row, sizeof(unsigned char), row_size, f_convergence);
+    }
+
+    /* Cleanup */
+    fclose(f_attractor);
+    fclose(f_convergence);
+    free(roots_real);
+    free(roots_imag);
+    free(threads);
+    free(thread_data);
+    free(attractors);
+    free(convergence);
+    free(root_colors);
+    free(attractor_row);
+    free(convergence_row);
+
+    return EXIT_SUCCESS;
 }
 
