@@ -1,4 +1,4 @@
-#include "omp.h"
+#include <omp.h>
 #include <math.h>
 #include <stdint.h>
 #include <pthread.h>
